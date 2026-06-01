@@ -151,6 +151,7 @@ async function showTurnOn(userId) {
   });
 }
 
+// Список шаблонов — только названия
 async function showTemplates(userId) {
   const templates = await getTemplates(userId);
 
@@ -164,28 +165,37 @@ async function showTemplates(userId) {
     return;
   }
 
-  let text = '📋 *Шаблоны*\n\n';
-  const rows = [];
-
-  for (const t of templates) {
-    const preview = t.text.length > 60 ? t.text.slice(0, 60) + '…' : t.text;
-    text += `*${t.name}*\n_«${preview}»_\n\n`;
-    rows.push([{ text: `✏️ Изменить текст сообщения — «${t.name}»`, callback_data: `tpl_edit:${t.id}` }]);
-    rows.push([
-      { text: `📝 Переименовать`, callback_data: `tpl_rename:${t.id}` },
-      { text: `🗑️ Удалить`,      callback_data: `tpl_delete:${t.id}` }
-    ]);
-    rows.push([{ text: '─────────────────', callback_data: 'noop' }]);
-  }
-
+  const rows = templates.map(t => [{ text: t.name, callback_data: `tpl_view:${t.id}` }]);
   if (templates.length < 5) {
     rows.push([{ text: '➕ Создать шаблон', callback_data: 'tpl_create' }]);
   }
 
-  await send(userId, text.trim(), {
+  await send(userId, '📋 *Шаблоны*\n\nВыбери шаблон:', {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: rows }
   });
+}
+
+// Один шаблон — детали + действия
+async function showTemplate(userId, templateId) {
+  const templates = await getTemplates(userId);
+  const t = templates.find(t => t.id === templateId);
+  if (!t) { await showTemplates(userId); return; }
+
+  await send(userId,
+    `📋 *${t.name}*\n\n_«${t.text}»_`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '✏️ Изменить текст сообщения', callback_data: `tpl_edit:${t.id}` }],
+          [{ text: '📝 Переименовать шаблон',     callback_data: `tpl_rename:${t.id}` }],
+          [{ text: '🗑️ Удалить шаблон',           callback_data: `tpl_delete:${t.id}` }],
+          [{ text: '← Назад к шаблонам',          callback_data: 'tpl_list' }]
+        ]
+      }
+    }
+  );
 }
 
 async function showSchedule(userId) {
@@ -431,8 +441,8 @@ async function handleStateInput(userId, text, state) {
         await updateUser(userId, { 'away.text': text });
         userbotManager.setAway(String(userId), text);
       }
-      await send(userId, '✅ Текст шаблона обновлён!');
-      await showTemplates(userId);
+      await send(userId, '✅ Текст обновлён!');
+      await showTemplate(userId, state.data.templateId);
       break;
     }
 
@@ -443,8 +453,8 @@ async function handleStateInput(userId, text, state) {
       }
       userState.delete(userId);
       await saveTemplate(userId, state.data.templateId, { name: text });
-      await send(userId, '✅ Шаблон переименован!');
-      await showTemplates(userId);
+      await send(userId, '✅ Переименован!');
+      await showTemplate(userId, state.data.templateId);
       break;
     }
 
@@ -587,6 +597,11 @@ bot.on('callback_query', async (query) => {
       await send(userId, '📝 Введи *название* шаблона (например: "На практике"):',
         { parse_mode: 'Markdown' });
 
+    // Открыть шаблон
+    } else if (data.startsWith('tpl_view:')) {
+      const templateId = data.slice(9);
+      await showTemplate(userId, templateId);
+
     // Редактировать текст шаблона
     } else if (data.startsWith('tpl_edit:')) {
       const templateId = data.slice(9);
@@ -609,8 +624,8 @@ bot.on('callback_query', async (query) => {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '✅ Да, удалить', callback_data: `tpl_del_ok:${templateId}` }],
-            [{ text: '↩️ Отмена',      callback_data: 'tpl_list' }]
+            [{ text: '🗑️ Да, удалить', callback_data: `tpl_del_ok:${templateId}` }],
+            [{ text: '← Отмена',        callback_data: `tpl_view:${templateId}` }]
           ]
         }
       });
