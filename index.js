@@ -27,13 +27,15 @@ const userState = new Map();
 // { step: string, data: object }
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
-const MAIN_KEYBOARD = {
-  keyboard: [
-    ['⚙️ Автоответчик', '📋 Шаблоны'],
-    ['🕐 Расписание',   'ℹ️ Инструкция']
-  ],
-  resize_keyboard: true
-};
+function mainKeyboard(isAway) {
+  return {
+    keyboard: [
+      [isAway ? '🔴 Выключить автоответчик' : '🟢 Включить автоответчик'],
+      ['📋 Шаблоны', '⏰ По расписанию']
+    ],
+    resize_keyboard: true
+  };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -54,25 +56,28 @@ async function requireConnected(userId) {
 
 // ── Экраны ────────────────────────────────────────────────────────────────────
 
-async function showAutoResponder(userId) {
-  const [user, templates] = await Promise.all([getUser(userId), getTemplates(userId)]);
+// Главный экран — статус + нужная клавиатура
+async function showMain(userId) {
+  const user = await getUser(userId);
   const away = user?.away || {};
+  const isAway = away.active || false;
 
-  if (away.active) {
-    const tpl = templates.find(t => t.id === away.templateId);
-    const name = tpl?.name || 'шаблон';
+  const text = isAway
+    ? `🟢 *Автоответчик включён*\n\n_«${away.text}»_`
+    : '⚪️ *Автоответчик выключен*';
+
+  await send(userId, text, {
+    parse_mode: 'Markdown',
+    reply_markup: mainKeyboard(isAway)
+  });
+}
+
+// Включить автоответчик — выбор шаблона (или сразу включить если один)
+async function showTurnOn(userId) {
+  const templates = await getTemplates(userId);
+  if (templates.length === 0) {
     await send(userId,
-      `🟢 *Автоответчик включён*\n\nШаблон: *${name}*\n\n_«${away.text}»_`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[{ text: '🔴 Выключить', callback_data: 'auto_off' }]]
-        }
-      }
-    );
-  } else if (templates.length === 0) {
-    await send(userId,
-      '🔴 *Автоответчик выключен*\n\nСначала создай шаблон в разделе 📋 Шаблоны.',
+      '⚪️ *Автоответчик выключен*\n\nСначала создай шаблон — он будет отправляться в ответ на сообщения и звонки.',
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -80,13 +85,13 @@ async function showAutoResponder(userId) {
         }
       }
     );
-  } else {
-    const rows = templates.map(t => [{ text: `▶️ ${t.name}`, callback_data: `auto_on:${t.id}` }]);
-    await send(userId, '🔴 *Автоответчик выключен*\n\nВыбери шаблон для включения:', {
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: rows }
-    });
+    return;
   }
+  const rows = templates.map(t => [{ text: `▶️ ${t.name}`, callback_data: `auto_on:${t.id}` }]);
+  await send(userId, 'Выбери шаблон для автоответа:', {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: rows }
+  });
 }
 
 async function showTemplates(userId) {
@@ -130,40 +135,30 @@ async function showSchedule(userId) {
   const sched = user?.schedule;
 
   if (!sched?.enabled) {
-    await send(userId, '🕐 *Расписание*\n\nАвтоответ по расписанию не настроен.', {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [[{ text: '📅 Настроить расписание', callback_data: 'sched_setup' }]]
+    await send(userId,
+      '⏰ *Автоответ по расписанию*\n\nРасписание не настроено.\n\nНапример: автоответ включается каждый день с 22:00 до 09:00 — и выключается сам.',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '📅 Настроить', callback_data: 'sched_setup' }]]
+        }
       }
-    });
+    );
   } else {
     const preview = sched.templateText?.slice(0, 50) || '';
     await send(userId,
-      `🕐 *Расписание*\n\nАвтоответ включается с *${sched.from}* до *${sched.to}*\n\n_«${preview}»_`,
+      `⏰ *Автоответ по расписанию*\n\nВключается с *${sched.from}* до *${sched.to}* автоматически.\n\n_«${preview}»_`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [{ text: '✏️ Изменить', callback_data: 'sched_setup' }],
-            [{ text: '❌ Отключить расписание', callback_data: 'sched_disable' }]
+            [{ text: '❌ Отключить', callback_data: 'sched_disable' }]
           ]
         }
       }
     );
   }
-}
-
-function showInstructions(userId) {
-  return send(userId,
-    `ℹ️ *Как пользоваться ReplyLater*\n\n` +
-    `*⚙️ Автоответчик* — включает автоответ на сообщения и звонки. Пока включён, все кто пишут тебе или звонят получат твой текст.\n\n` +
-    `*📋 Шаблоны* — тексты автоответа, до 5 штук. Например:\n` +
-    `• "Я на практике, отвечу вечером"\n` +
-    `• "В отъезде до 5 июня, буду на связи по возвращении"\n\n` +
-    `*🕐 Расписание* — автоматически включает автоответ в заданные часы. Например с 22:00 до 9:00 каждый день.\n\n` +
-    `*Примечание:* Telegram иногда завершает звонки автоматически — это нормально, ответное сообщение всё равно придёт.`,
-    { parse_mode: 'Markdown' }
-  );
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -211,10 +206,8 @@ async function initiateAuth(userId) {
     await userbotManager.addUser(String(userId), sessionStr);
     cleanupAuth(userId);
 
-    await send(userId,
-      '✅ Аккаунт успешно подключён!\n\nТеперь ты можешь включить автоответчик.',
-      { reply_markup: MAIN_KEYBOARD }
-    );
+    await send(userId, '✅ Аккаунт успешно подключён!\n\nТеперь можешь включить автоответчик.');
+    await showMain(userId);
   }).catch(async (err) => {
     console.error(`[auth] Failed for user ${userId}:`, err.message);
     await send(userId, '❌ Не удалось подключить аккаунт. Попробуй снова — нажми /start');
@@ -270,7 +263,7 @@ bot.onText(/^\/start$/, async (msg) => {
       }
     );
   } else {
-    await send(userId, 'Главное меню:', { reply_markup: MAIN_KEYBOARD });
+    await showMain(userId);
   }
 });
 
@@ -278,7 +271,7 @@ bot.onText(/^\/cancel$/, async (msg) => {
   const userId = msg.from.id;
   cleanupAuth(userId);
   userState.delete(userId);
-  await send(userId, '↩️ Отменено.', { reply_markup: MAIN_KEYBOARD });
+  await showMain(userId);
 });
 
 // ── Message handler ───────────────────────────────────────────────────────────
@@ -307,10 +300,15 @@ bot.on('message', async (msg) => {
   if (!(await requireConnected(userId))) return;
 
   switch (text) {
-    case '⚙️ Автоответчик': await showAutoResponder(userId); break;
-    case '📋 Шаблоны':       await showTemplates(userId);     break;
-    case '🕐 Расписание':    await showSchedule(userId);      break;
-    case 'ℹ️ Инструкция':   await showInstructions(userId);   break;
+    case '🟢 Включить автоответчик':   await showTurnOn(userId);    break;
+    case '🔴 Выключить автоответчик': {
+      userbotManager.clearAway(String(userId));
+      await saveUser(userId, { away: { active: false, text: '' } });
+      await showMain(userId);
+      break;
+    }
+    case '📋 Шаблоны':        await showTemplates(userId);  break;
+    case '⏰ По расписанию':  await showSchedule(userId);   break;
   }
 });
 
@@ -422,7 +420,7 @@ bot.on('callback_query', async (query) => {
     } else if (data === 'auto_off') {
       userbotManager.clearAway(String(userId));
       await saveUser(userId, { away: { active: false, text: '' } });
-      await send(userId, '🔴 Автоответчик выключен.');
+      await showMain(userId);
 
     // Включить автоответчик с шаблоном
     } else if (data.startsWith('auto_on:')) {
@@ -433,15 +431,7 @@ bot.on('callback_query', async (query) => {
 
       await saveUser(userId, { away: { active: true, text: tpl.text, templateId } });
       userbotManager.setAway(String(userId), tpl.text);
-      await send(userId,
-        `🟢 *Автоответчик включён!*\n\nШаблон: *${tpl.name}*\n\n_«${tpl.text}»_`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[{ text: '🔴 Выключить', callback_data: 'auto_off' }]]
-          }
-        }
-      );
+      await showMain(userId);
 
     // Создать шаблон
     } else if (data === 'tpl_create') {
