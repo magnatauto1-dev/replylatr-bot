@@ -295,7 +295,7 @@ bot.onText(/^\/start$/, async (msg) => {
 
   if (!user?.connected) {
     await send(userId,
-      '👋 Привет! Я *ReplyLater* — автоответчик для Telegram.\n\n' +
+      '👋 Привет! Я *Taker Time* — автоответчик для Telegram.\n\n' +
       'Когда ты занят — автоматически отвечу на сообщения и звонки твоим текстом.\n\n' +
       'Для начала подключи свой Telegram-аккаунт:',
       {
@@ -379,8 +379,18 @@ async function handleStateInput(userId, text, state) {
         text,
         createdAt: Date.now()
       });
-      await send(userId, `✅ Шаблон *${state.data.name}* создан!`, { parse_mode: 'Markdown' });
-      await showTemplates(userId);
+      await send(userId,
+        `✅ Шаблон *${state.data.name}* создан!\n\nВключить автоответчик с этим шаблоном?`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '▶️ Включить сейчас', callback_data: `auto_tpl:${templateId}` }],
+              [{ text: '📋 К шаблонам',      callback_data: 'tpl_list' }]
+            ]
+          }
+        }
+      );
       break;
     }
 
