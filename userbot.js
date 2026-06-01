@@ -57,7 +57,7 @@ class UserbotManager {
       awayText: opts.awayText || '',
       repliedCalls: new Set(),
       repliedTexts: new Map(),     // chatId -> timestamp последнего ответа на текст
-      repliedCallDialogs: new Map() // chatId -> timestamp последнего ответа на звонок
+      repliedCallDialogs: new Map(), // chatId -> timestamp последнего ответа на звонок
       schedule: opts.schedule || null,
       scheduleByAuto: false,
       pollInterval: null
