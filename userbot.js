@@ -73,6 +73,9 @@ class UserbotManager {
       if (!event.isPrivate) return;
       const msg = event.message;
       if (!msg || msg.out) return;
+      // Игнорируем сообщения старше 60 секунд (защита от replay при рестарте)
+      const ageMs = Date.now() - msg.date * 1000;
+      if (ageMs > 60 * 1000) return;
       try {
         await msg.reply({ message: state.awayText });
         console.log(`[userbot] 💬 User ${userId}: replied to text`);
