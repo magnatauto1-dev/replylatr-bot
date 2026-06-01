@@ -31,7 +31,7 @@ function mainKeyboard(isAway) {
   return {
     keyboard: [
       [isAway ? '🔴 Выключить автоответчик' : '🟢 Включить автоответчик'],
-      ['📋 Шаблоны', '⏰ По расписанию']
+      ['📋 Шаблоны']
     ],
     resize_keyboard: true
   };
@@ -55,24 +55,27 @@ async function requireConnected(userId) {
 }
 
 // Парсит ввод пользователя в timestamp авто-выключения
-// "3" / "3ч" → через 3 часа
-// "15.06" / "15.06 18:00" → до этой даты/времени
-function parseUntil(text) {
+// inputType: 'hours' — только цифры, 'date' — только дата, undefined — оба варианта
+function parseUntil(text, inputType) {
   text = text.trim();
-  // Часы: "3", "3ч", "24 ч", "3h"
-  const hoursMatch = text.match(/^(\d+)\s*(ч|час|часа|часов|h)?$/i);
-  if (hoursMatch) {
-    const h = parseInt(hoursMatch[1]);
-    if (h > 0 && h <= 720) return Date.now() + h * 60 * 60 * 1000;
+  if (!inputType || inputType === 'hours') {
+    // Часы: "3", "3ч", "24 ч", "3h"
+    const hoursMatch = text.match(/^(\d+)\s*(ч|час|часа|часов|h)?$/i);
+    if (hoursMatch) {
+      const h = parseInt(hoursMatch[1]);
+      if (h > 0 && h <= 720) return Date.now() + h * 60 * 60 * 1000;
+    }
   }
-  // Дата: "15.06" или "15.06 18:00" или "15.06.2026 18:00"
-  const dateMatch = text.match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s*(?:(\d{1,2}):(\d{2}))?$/);
-  if (dateMatch) {
-    const [, day, month, year, hh, mm] = dateMatch;
-    const y = year ? parseInt(year) : new Date().getFullYear();
-    const d = new Date(y, parseInt(month) - 1, parseInt(day),
-                       hh ? parseInt(hh) : 0, mm ? parseInt(mm) : 0);
-    if (!isNaN(d.getTime()) && d.getTime() > Date.now()) return d.getTime();
+  if (!inputType || inputType === 'date') {
+    // Дата: "15.06" или "15.06 18:00" или "15.06.2026 18:00"
+    const dateMatch = text.match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s*(?:(\d{1,2}):(\d{2}))?$/);
+    if (dateMatch) {
+      const [, day, month, year, hh, mm] = dateMatch;
+      const y = year ? parseInt(year) : new Date().getFullYear();
+      const d = new Date(y, parseInt(month) - 1, parseInt(day),
+                         hh ? parseInt(hh) : 0, mm ? parseInt(mm) : 0);
+      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) return d.getTime();
+    }
   }
   return null;
 }
@@ -115,7 +118,7 @@ async function showMain(userId) {
   });
 }
 
-// Включить автоответчик — выбор шаблона (или сразу включить если один)
+// Включить автоответчик — выбор режима, потом шаблон
 async function showTurnOn(userId) {
   const templates = await getTemplates(userId);
   if (templates.length === 0) {
@@ -130,10 +133,15 @@ async function showTurnOn(userId) {
     );
     return;
   }
-  const rows = templates.map(t => [{ text: `▶️ ${t.name}`, callback_data: `auto_tpl:${t.id}` }]);
-  await send(userId, 'Выбери шаблон для автоответа:', {
-    parse_mode: 'Markdown',
-    reply_markup: { inline_keyboard: rows }
+  await send(userId, 'Как включить автоответчик?', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '⏱ На несколько часов',      callback_data: 'mode_hours' }],
+        [{ text: '📅 До конкретной даты',      callback_data: 'mode_date' }],
+        [{ text: '🔁 По расписанию (ежедневно)', callback_data: 'mode_schedule' }],
+        [{ text: '∞ Без ограничений',           callback_data: 'mode_unlimited' }]
+      ]
+    }
   });
 }
 
@@ -341,26 +349,30 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Кнопки главного меню — всегда обрабатываем первыми, сбрасывая любой текущий шаг
+  const MAIN_BUTTONS = ['🟢 Включить автоответчик', '🔴 Выключить автоответчик', '📋 Шаблоны'];
+  if (MAIN_BUTTONS.includes(text)) {
+    userState.delete(userId); // сбросить незавершённый шаг
+    if (!(await requireConnected(userId))) return;
+    switch (text) {
+      case '🟢 Включить автоответчик':   await showTurnOn(userId);    break;
+      case '🔴 Выключить автоответчик': {
+        userbotManager.clearAway(String(userId));
+        await saveUser(userId, { away: { active: false, text: '' } });
+        await showMain(userId);
+        break;
+      }
+      case '📋 Шаблоны':        await showTemplates(userId);  break;
+      case '⏰ По расписанию':  await showSchedule(userId);   break;
+    }
+    return;
+  }
+
   // Ввод данных (создание шаблона, расписание и т.д.)
   const state = userState.get(userId);
   if (state) {
     await handleStateInput(userId, text, state);
     return;
-  }
-
-  // Кнопки главного меню
-  if (!(await requireConnected(userId))) return;
-
-  switch (text) {
-    case '🟢 Включить автоответчик':   await showTurnOn(userId);    break;
-    case '🔴 Выключить автоответчик': {
-      userbotManager.clearAway(String(userId));
-      await saveUser(userId, { away: { active: false, text: '' } });
-      await showMain(userId);
-      break;
-    }
-    case '📋 Шаблоны':        await showTemplates(userId);  break;
-    case '⏰ По расписанию':  await showSchedule(userId);   break;
   }
 });
 
@@ -462,12 +474,15 @@ async function handleStateInput(userId, text, state) {
     }
 
     case 'away_timed': {
-      const until = parseUntil(text);
+      const { inputType } = state.data;
+      // Для часов принимаем только число, для даты — только дату
+      const until = parseUntil(text, inputType);
       if (!until) {
-        await send(userId,
-          '❌ Не понял формат. Введи:\n• Часы: `3` или `24`\n• Дату: `15.06` или `15.06 18:00`',
-          { parse_mode: 'Markdown' }
-        );
+        if (inputType === 'hours') {
+          await send(userId, '❌ Введи число часов (например: `3` или `24`)', { parse_mode: 'Markdown' });
+        } else {
+          await send(userId, '❌ Введи дату (например: `15.06` или `15.06 18:00`)', { parse_mode: 'Markdown' });
+        }
         return;
       }
       userState.delete(userId);
@@ -502,46 +517,56 @@ bot.on('callback_query', async (query) => {
       await saveUser(userId, { away: { active: false, text: '' } });
       await showMain(userId);
 
-    // Шаблон выбран — показать выбор режима
+    // Режим выбран — показываем шаблоны
+    } else if (data.startsWith('mode_')) {
+      const mode = data.slice(5); // hours | date | schedule | unlimited
+      const templates = await getTemplates(userId);
+      if (templates.length === 0) {
+        await send(userId, '❌ Сначала создай шаблон в разделе 📋 Шаблоны.');
+        return;
+      }
+      const modeLabel = { hours: '⏱ На несколько часов', date: '📅 До даты', schedule: '🔁 По расписанию', unlimited: '∞ Без ограничений' }[mode] || '';
+      const rows = templates.map(t => [{ text: `▶️ ${t.name}`, callback_data: `auto_tpl:${mode}:${t.id}` }]);
+      await send(userId, `${modeLabel}\n\nВыбери шаблон:`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: rows }
+      });
+
+    // Шаблон выбран — действие зависит от режима
     } else if (data.startsWith('auto_tpl:')) {
-      const templateId = data.slice(9);
+      const parts      = data.slice(9).split(':');
+      const mode       = parts[0]; // hours | date | schedule | unlimited
+      const templateId = parts[1];
       const templates  = await getTemplates(userId);
       const tpl        = templates.find(t => t.id === templateId);
       if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
-      await send(userId,
-        `Шаблон: *${tpl.name}*\n\nКак долго включить автоответчик?`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '⏱ На время',         callback_data: `auto_timed:${templateId}` }],
-              [{ text: '∞ Без ограничений',   callback_data: `auto_unlimited:${templateId}` }]
-            ]
+
+      if (mode === 'unlimited') {
+        await saveUser(userId, { away: { active: true, text: tpl.text, templateId, until: null } });
+        userbotManager.setAway(String(userId), tpl.text);
+        await showMain(userId);
+      } else if (mode === 'hours') {
+        userState.set(userId, { step: 'away_timed', data: { templateId, templateText: tpl.text, inputType: 'hours' } });
+        await send(userId, '⏱ На сколько часов включить?\n\nВведи число (например: `3` или `24`)', { parse_mode: 'Markdown' });
+      } else if (mode === 'date') {
+        userState.set(userId, { step: 'away_timed', data: { templateId, templateText: tpl.text, inputType: 'date' } });
+        await send(userId, '📅 До какой даты включить?\n\nВведи дату (например: `15.06` или `15.06 18:00`)', { parse_mode: 'Markdown' });
+      } else if (mode === 'schedule') {
+        // Переходим в настройку расписания с уже выбранным шаблоном
+        await send(userId,
+          `Шаблон: *${tpl.name}*\n\nВ какие дни включать автоответ?`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '📅 Каждый день',      callback_data: `sched_days:all:${templateId}` }],
+                [{ text: '💼 Будни (Пн–Пт)',    callback_data: `sched_days:weekdays:${templateId}` }],
+                [{ text: '🌴 Выходные (Сб–Вс)', callback_data: `sched_days:weekends:${templateId}` }]
+              ]
+            }
           }
-        }
-      );
-
-    // Включить без ограничений
-    } else if (data.startsWith('auto_unlimited:')) {
-      const templateId = data.slice(15);
-      const templates  = await getTemplates(userId);
-      const tpl        = templates.find(t => t.id === templateId);
-      if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
-      await saveUser(userId, { away: { active: true, text: tpl.text, templateId, until: null } });
-      userbotManager.setAway(String(userId), tpl.text);
-      await showMain(userId);
-
-    // Включить на время — запрашиваем ввод
-    } else if (data.startsWith('auto_timed:')) {
-      const templateId = data.slice(11);
-      const templates  = await getTemplates(userId);
-      const tpl        = templates.find(t => t.id === templateId);
-      if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
-      userState.set(userId, { step: 'away_timed', data: { templateId, templateText: tpl.text } });
-      await send(userId,
-        '⏱ На сколько включить?\n\nВведи количество часов или дату:\n• `3` — на 3 часа\n• `15.06` — до 15 июня\n• `15.06 18:00` — до 15 июня 18:00',
-        { parse_mode: 'Markdown' }
-      );
+        );
+      }
 
     // Создать шаблон
     } else if (data === 'tpl_create') {
