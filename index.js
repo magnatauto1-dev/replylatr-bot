@@ -54,6 +54,48 @@ async function requireConnected(userId) {
   return true;
 }
 
+// Парсит ввод пользователя в timestamp авто-выключения
+// "3" / "3ч" → через 3 часа
+// "15.06" / "15.06 18:00" → до этой даты/времени
+function parseUntil(text) {
+  text = text.trim();
+  // Часы: "3", "3ч", "24 ч", "3h"
+  const hoursMatch = text.match(/^(\d+)\s*(ч|час|часа|часов|h)?$/i);
+  if (hoursMatch) {
+    const h = parseInt(hoursMatch[1]);
+    if (h > 0 && h <= 720) return Date.now() + h * 60 * 60 * 1000;
+  }
+  // Дата: "15.06" или "15.06 18:00" или "15.06.2026 18:00"
+  const dateMatch = text.match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s*(?:(\d{1,2}):(\d{2}))?$/);
+  if (dateMatch) {
+    const [, day, month, year, hh, mm] = dateMatch;
+    const y = year ? parseInt(year) : new Date().getFullYear();
+    const d = new Date(y, parseInt(month) - 1, parseInt(day),
+                       hh ? parseInt(hh) : 0, mm ? parseInt(mm) : 0);
+    if (!isNaN(d.getTime()) && d.getTime() > Date.now()) return d.getTime();
+  }
+  return null;
+}
+
+// Форматирует timestamp авто-выключения в читаемую строку
+function formatUntil(until) {
+  const d = new Date(until);
+  const diffH = Math.round((until - Date.now()) / (60 * 60 * 1000));
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const months = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+  if (diffH < 24) return `через ${diffH} ч (сегодня в ${hh}:${mm})`;
+  return `${d.getDate()} ${months[d.getMonth()]} в ${hh}:${mm}`;
+}
+
+// Читаемое название дней расписания
+function daysLabel(days) {
+  if (!days || days === 'all') return 'каждый день';
+  if (days === 'weekdays') return 'Пн–Пт';
+  if (days === 'weekends') return 'Сб–Вс';
+  return 'каждый день';
+}
+
 // ── Экраны ────────────────────────────────────────────────────────────────────
 
 // Главный экран — статус + нужная клавиатура
@@ -62,8 +104,9 @@ async function showMain(userId) {
   const away = user?.away || {};
   const isAway = away.active || false;
 
+  const untilStr = away.until ? `\n\n⏱ Выключится ${formatUntil(away.until)}` : '';
   const text = isAway
-    ? `🟢 *Автоответчик включён*\n\n_«${away.text}»_`
+    ? `🟢 *Автоответчик включён*\n\n_«${away.text}»_${untilStr}`
     : '⚪️ *Автоответчик выключен*';
 
   await send(userId, text, {
@@ -87,7 +130,7 @@ async function showTurnOn(userId) {
     );
     return;
   }
-  const rows = templates.map(t => [{ text: `▶️ ${t.name}`, callback_data: `auto_on:${t.id}` }]);
+  const rows = templates.map(t => [{ text: `▶️ ${t.name}`, callback_data: `auto_tpl:${t.id}` }]);
   await send(userId, 'Выбери шаблон для автоответа:', {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: rows }
@@ -147,7 +190,7 @@ async function showSchedule(userId) {
   } else {
     const preview = sched.templateText?.slice(0, 50) || '';
     await send(userId,
-      `⏰ *Автоответ по расписанию*\n\nВключается с *${sched.from}* до *${sched.to}* автоматически.\n\n_«${preview}»_`,
+      `⏰ *Автоответ по расписанию*\n\nВключается с *${sched.from}* до *${sched.to}*, ${daysLabel(sched.days)}.\n\n_«${preview}»_`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -387,14 +430,32 @@ async function handleStateInput(userId, text, state) {
         enabled:      true,
         from:         state.data.from,
         to:           text,
+        days:         state.data.days || 'all',
         templateText: state.data.templateText
       };
       await saveUser(userId, { schedule });
       userbotManager.setSchedule(String(userId), schedule);
       await send(userId,
-        `✅ Расписание настроено!\n\nАвтоответ будет включаться с *${state.data.from}* до *${text}*`,
+        `✅ Расписание настроено!\n\nАвтоответ будет включаться с *${state.data.from}* до *${text}*, ${daysLabel(schedule.days)}.`,
         { parse_mode: 'Markdown' }
       );
+      break;
+    }
+
+    case 'away_timed': {
+      const until = parseUntil(text);
+      if (!until) {
+        await send(userId,
+          '❌ Не понял формат. Введи:\n• Часы: `3` или `24`\n• Дату: `15.06` или `15.06 18:00`',
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+      userState.delete(userId);
+      const { templateId, templateText } = state.data;
+      await saveUser(userId, { away: { active: true, text: templateText, templateId, until } });
+      userbotManager.setAway(String(userId), templateText, { until });
+      await showMain(userId);
       break;
     }
 
@@ -422,16 +483,46 @@ bot.on('callback_query', async (query) => {
       await saveUser(userId, { away: { active: false, text: '' } });
       await showMain(userId);
 
-    // Включить автоответчик с шаблоном
-    } else if (data.startsWith('auto_on:')) {
-      const templateId = data.slice(8);
+    // Шаблон выбран — показать выбор режима
+    } else if (data.startsWith('auto_tpl:')) {
+      const templateId = data.slice(9);
       const templates  = await getTemplates(userId);
       const tpl        = templates.find(t => t.id === templateId);
       if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
+      await send(userId,
+        `Шаблон: *${tpl.name}*\n\nКак долго включить автоответчик?`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '⏱ На время',         callback_data: `auto_timed:${templateId}` }],
+              [{ text: '∞ Без ограничений',   callback_data: `auto_unlimited:${templateId}` }]
+            ]
+          }
+        }
+      );
 
-      await saveUser(userId, { away: { active: true, text: tpl.text, templateId } });
+    // Включить без ограничений
+    } else if (data.startsWith('auto_unlimited:')) {
+      const templateId = data.slice(15);
+      const templates  = await getTemplates(userId);
+      const tpl        = templates.find(t => t.id === templateId);
+      if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
+      await saveUser(userId, { away: { active: true, text: tpl.text, templateId, until: null } });
       userbotManager.setAway(String(userId), tpl.text);
       await showMain(userId);
+
+    // Включить на время — запрашиваем ввод
+    } else if (data.startsWith('auto_timed:')) {
+      const templateId = data.slice(11);
+      const templates  = await getTemplates(userId);
+      const tpl        = templates.find(t => t.id === templateId);
+      if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
+      userState.set(userId, { step: 'away_timed', data: { templateId, templateText: tpl.text } });
+      await send(userId,
+        '⏱ На сколько включить?\n\nВведи количество часов или дату:\n• `3` — на 3 часа\n• `15.06` — до 15 июня\n• `15.06 18:00` — до 15 июня 18:00',
+        { parse_mode: 'Markdown' }
+      );
 
     // Создать шаблон
     } else if (data === 'tpl_create') {
@@ -500,15 +591,37 @@ bot.on('callback_query', async (query) => {
         reply_markup: { inline_keyboard: rows }
       });
 
-    // Расписание — шаблон выбран, запрашиваем время
+    // Расписание — шаблон выбран, выбираем дни
     } else if (data.startsWith('sched_tpl:')) {
       const templateId = data.slice(10);
       const templates  = await getTemplates(userId);
       const tpl        = templates.find(t => t.id === templateId);
       if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
-      userState.set(userId, { step: 'schedule_from', data: { templateId, templateText: tpl.text } });
       await send(userId,
-        `Шаблон: *${tpl.name}*\n\nС какого времени включать автоответ? (ЧЧ:ММ, например: 22:00)`,
+        `Шаблон: *${tpl.name}*\n\nВ какие дни включать автоответ?`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '📅 Каждый день',    callback_data: `sched_days:all:${templateId}` }],
+              [{ text: '💼 Будни (Пн–Пт)',  callback_data: `sched_days:weekdays:${templateId}` }],
+              [{ text: '🌴 Выходные (Сб–Вс)', callback_data: `sched_days:weekends:${templateId}` }]
+            ]
+          }
+        }
+      );
+
+    // Расписание — дни выбраны, запрашиваем время
+    } else if (data.startsWith('sched_days:')) {
+      const parts      = data.slice(11).split(':');
+      const days       = parts[0]; // all | weekdays | weekends
+      const templateId = parts[1];
+      const templates  = await getTemplates(userId);
+      const tpl        = templates.find(t => t.id === templateId);
+      if (!tpl) { await send(userId, '❌ Шаблон не найден.'); return; }
+      userState.set(userId, { step: 'schedule_from', data: { templateId, templateText: tpl.text, days } });
+      await send(userId,
+        `С какого времени включать автоответ? (ЧЧ:ММ, например: 22:00)`,
         { parse_mode: 'Markdown' }
       );
 

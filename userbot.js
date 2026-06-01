@@ -32,6 +32,7 @@ class UserbotManager {
         await this._startClient(String(user.id), sessionStr, {
           isAway: user.away?.active || false,
           awayText: user.away?.text || '',
+          awayUntil: user.away?.until || null,
           schedule: user.schedule || null
         });
       } catch (e) {
@@ -56,8 +57,9 @@ class UserbotManager {
       isAway: opts.isAway || false,
       awayText: opts.awayText || '',
       repliedCalls: new Set(),
-      repliedTexts: new Map(),     // chatId -> timestamp последнего ответа на текст
+      repliedTexts: new Map(),      // chatId -> timestamp последнего ответа на текст
       repliedCallDialogs: new Map(), // chatId -> timestamp последнего ответа на звонок
+      awayUntil: opts.awayUntil || null, // timestamp авто-выключения (null = без ограничений)
       schedule: opts.schedule || null,
       scheduleByAuto: false,
       pollInterval: null
@@ -150,12 +152,16 @@ class UserbotManager {
   }
 
   // Включить автоответ
-  setAway(userId, text, byAuto = false) {
+  // opts: { until?: number, byAuto?: boolean }
+  setAway(userId, text, opts = {}) {
+    // Обратная совместимость: setAway(userId, text, true)
+    if (typeof opts === 'boolean') opts = { byAuto: opts };
     const state = this.clients.get(String(userId));
     if (!state) return false;
     state.isAway = true;
     state.awayText = text;
-    if (byAuto) state.scheduleByAuto = true;
+    state.awayUntil = opts.until || null;
+    if (opts.byAuto) state.scheduleByAuto = true;
     return true;
   }
 
