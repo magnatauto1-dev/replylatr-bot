@@ -96,52 +96,33 @@ class UserbotManager {
       }
     }, new NewMessage({ incoming: true }));
 
-    // Мгновенный ответ на пропущенный звонок через event handler
-    client.addEventHandler(async (event) => {
-      if (!state.isAway || !state.awayText) return;
-      if (!event.isPrivate) return;
-      const msg = event.message;
-      if (!msg) return;
-      if (msg.className !== 'MessageService') return;
-      if (msg.action?.className !== 'MessageActionPhoneCall') return;
-      if (state.repliedCalls.has(msg.id)) return;
-      state.repliedCalls.add(msg.id);
-      // Cooldown: один ответ на звонки из одного чата раз в 5 минут
-      const callDialogId = String(msg.peerId?.userId || msg.chatId);
-      const lastCallReply = state.repliedCallDialogs.get(callDialogId) || 0;
-      if (Date.now() - lastCallReply < 5 * 60 * 1000) return;
-      state.repliedCallDialogs.set(callDialogId, Date.now());
-      console.log(`[userbot] ☎️ User ${userId}: missed call id=${msg.id} (instant)`);
-      try {
-        await client.sendMessage(msg.peerId, { message: state.awayText });
-        console.log(`[userbot] ✅ User ${userId}: replied to call (instant)`);
-      } catch (e) {
-        console.error(`[userbot] call reply error (${userId}):`, e.message);
-      }
-    }, new NewMessage({ incoming: true }));
-
-    // Поллинг пропущенных звонков каждые 30 секунд (fallback, если event не сработал)
+    // Поллинг пропущенных звонков каждые 15 секунд
+    // Логика: один ответ на диалог — помечаем все call-сообщения сразу, потом шлём один ответ
     state.pollInterval = setInterval(async () => {
       if (!state.isAway || !state.awayText) return;
       try {
         const dialogs = await client.getDialogs({ limit: 50 });
         for (const dialog of dialogs) {
           if (!dialog.isUser) continue;
+          const dialogId = String(dialog.entity?.id);
+          // Cooldown по диалогу: один ответ на звонки раз в 5 минут
+          const lastCallReply = state.repliedCallDialogs.get(dialogId) || 0;
+          if (Date.now() - lastCallReply < 5 * 60 * 1000) continue;
           try {
             const messages = await client.getMessages(dialog.entity, { limit: 10 });
+            let hasNewCall = false;
             for (const msg of messages) {
               if (msg.className !== 'MessageService') continue;
               if (msg.action?.className !== 'MessageActionPhoneCall') continue;
               if (state.repliedCalls.has(msg.id)) continue;
               const ageMs = Date.now() - msg.date * 1000;
-              state.repliedCalls.add(msg.id);
+              state.repliedCalls.add(msg.id); // помечаем все, чтобы не дублировать
               if (ageMs > 5 * 60 * 1000) continue;
-              // Cooldown по диалогу — не дублируем если event handler уже ответил
-              const pollDialogId = String(dialog.entity?.id);
-              const lastPollReply = state.repliedCallDialogs.get(pollDialogId) || 0;
-              if (Date.now() - lastPollReply < 5 * 60 * 1000) continue;
-              state.repliedCallDialogs.set(pollDialogId, Date.now());
-              console.log(`[userbot] ☎️ User ${userId}: missed call id=${msg.id}`);
+              hasNewCall = true;
+            }
+            if (hasNewCall) {
+              state.repliedCallDialogs.set(dialogId, Date.now());
+              console.log(`[userbot] ☎️ User ${userId}: missed call from dialog ${dialogId}`);
               await client.sendMessage(dialog.entity, { message: state.awayText });
               console.log(`[userbot] ✅ User ${userId}: replied to call`);
             }
@@ -150,7 +131,7 @@ class UserbotManager {
       } catch (e) {
         console.error(`[userbot] poll calls error (${userId}):`, e.message);
       }
-    }, 30000);
+    }, 15000);
   }
 
   // Подключить нового пользователя (после авторизации)
