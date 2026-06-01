@@ -82,13 +82,19 @@ function parseUntil(text, inputType) {
 
 // Форматирует timestamp авто-выключения в читаемую строку
 function formatUntil(until) {
+  const diffMs = until - Date.now();
+  const diffMins = Math.round(diffMs / 60000);
+  const diffH = Math.floor(diffMs / (60 * 60 * 1000));
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+
+  if (diffMins < 60) return `через ${diffMins} мин`;
+  if (diffH < 24) return `через ${diffH} ч`;
+  if (diffDays === 1) return 'через 1 день';
+  if (diffDays < 30) return `через ${diffDays} дн`;
+  // Для дальних дат — показываем число и месяц (UTC, нейтрально)
   const d = new Date(until);
-  const diffH = Math.round((until - Date.now()) / (60 * 60 * 1000));
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
   const months = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
-  if (diffH < 24) return `через ${diffH} ч (сегодня в ${hh}:${mm})`;
-  return `${d.getDate()} ${months[d.getMonth()]} в ${hh}:${mm}`;
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]}`;
 }
 
 // Читаемое название дней расписания
@@ -162,13 +168,14 @@ async function showTemplates(userId) {
   const rows = [];
 
   for (const t of templates) {
-    const preview = t.text.length > 50 ? t.text.slice(0, 50) + '…' : t.text;
+    const preview = t.text.length > 60 ? t.text.slice(0, 60) + '…' : t.text;
     text += `*${t.name}*\n_«${preview}»_\n\n`;
+    rows.push([{ text: `✏️ Изменить текст сообщения — «${t.name}»`, callback_data: `tpl_edit:${t.id}` }]);
     rows.push([
-      { text: '✏️ Текст',      callback_data: `tpl_edit:${t.id}` },
-      { text: '📝 Имя',        callback_data: `tpl_rename:${t.id}` },
-      { text: '🗑️ Удалить',   callback_data: `tpl_delete:${t.id}` }
+      { text: `📝 Переименовать`, callback_data: `tpl_rename:${t.id}` },
+      { text: `🗑️ Удалить`,      callback_data: `tpl_delete:${t.id}` }
     ]);
+    rows.push([{ text: '─────────────────', callback_data: 'noop' }]);
   }
 
   if (templates.length < 5) {
@@ -505,6 +512,7 @@ bot.on('callback_query', async (query) => {
   const data   = query.data;
 
   await bot.answerCallbackQuery(query.id).catch(() => {});
+  if (data === 'noop') return; // кнопка-разделитель, ничего не делаем
 
   try {
     // Подключить аккаунт
