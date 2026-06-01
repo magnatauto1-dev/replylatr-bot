@@ -56,7 +56,8 @@ class UserbotManager {
       isAway: opts.isAway || false,
       awayText: opts.awayText || '',
       repliedCalls: new Set(),
-      repliedTexts: new Map(), // chatId -> timestamp последнего ответа
+      repliedTexts: new Map(),     // chatId -> timestamp последнего ответа на текст
+      repliedCallDialogs: new Map() // chatId -> timestamp последнего ответа на звонок
       schedule: opts.schedule || null,
       scheduleByAuto: false,
       pollInterval: null
@@ -105,6 +106,11 @@ class UserbotManager {
       if (msg.action?.className !== 'MessageActionPhoneCall') return;
       if (state.repliedCalls.has(msg.id)) return;
       state.repliedCalls.add(msg.id);
+      // Cooldown: один ответ на звонки из одного чата раз в 5 минут
+      const callDialogId = String(msg.peerId?.userId || msg.chatId);
+      const lastCallReply = state.repliedCallDialogs.get(callDialogId) || 0;
+      if (Date.now() - lastCallReply < 5 * 60 * 1000) return;
+      state.repliedCallDialogs.set(callDialogId, Date.now());
       console.log(`[userbot] ☎️ User ${userId}: missed call id=${msg.id} (instant)`);
       try {
         await client.sendMessage(msg.peerId, { message: state.awayText });
@@ -130,6 +136,11 @@ class UserbotManager {
               const ageMs = Date.now() - msg.date * 1000;
               state.repliedCalls.add(msg.id);
               if (ageMs > 5 * 60 * 1000) continue;
+              // Cooldown по диалогу — не дублируем если event handler уже ответил
+              const pollDialogId = String(dialog.entity?.id);
+              const lastPollReply = state.repliedCallDialogs.get(pollDialogId) || 0;
+              if (Date.now() - lastPollReply < 5 * 60 * 1000) continue;
+              state.repliedCallDialogs.set(pollDialogId, Date.now());
               console.log(`[userbot] ☎️ User ${userId}: missed call id=${msg.id}`);
               await client.sendMessage(dialog.entity, { message: state.awayText });
               console.log(`[userbot] ✅ User ${userId}: replied to call`);
