@@ -56,6 +56,7 @@ class UserbotManager {
       isAway: opts.isAway || false,
       awayText: opts.awayText || '',
       repliedCalls: new Set(),
+      repliedTexts: new Map(), // chatId -> timestamp последнего ответа
       schedule: opts.schedule || null,
       scheduleByAuto: false,
       pollInterval: null
@@ -76,6 +77,16 @@ class UserbotManager {
       // Игнорируем сообщения старше 60 секунд (защита от replay при рестарте)
       const ageMs = Date.now() - msg.date * 1000;
       if (ageMs > 60 * 1000) return;
+      // Игнорируем сообщения от ботов (в т.ч. от нашего собственного бота)
+      try {
+        const sender = await client.getEntity(msg.senderId);
+        if (sender?.bot) return;
+      } catch (e) { /* если не удалось получить — пропускаем проверку */ }
+      // Cooldown: один ответ на один чат раз в 5 минут
+      const chatId = String(msg.chatId || msg.peerId?.userId || msg.senderId);
+      const lastReplied = state.repliedTexts.get(chatId) || 0;
+      if (Date.now() - lastReplied < 5 * 60 * 1000) return;
+      state.repliedTexts.set(chatId, Date.now());
       try {
         await msg.reply({ message: state.awayText });
         console.log(`[userbot] 💬 User ${userId}: replied to text`);
