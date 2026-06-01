@@ -74,8 +74,6 @@ class UserbotManager {
       const msg = event.message;
       if (!msg || msg.out) return;
       try {
-        const sender = await event.getSender();
-        if (sender?.bot) return;
         await msg.reply({ message: state.awayText });
         console.log(`[userbot] 💬 User ${userId}: replied to text`);
       } catch (e) {
