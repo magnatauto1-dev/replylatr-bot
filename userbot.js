@@ -95,7 +95,26 @@ class UserbotManager {
       }
     }, new NewMessage({ incoming: true }));
 
-    // Поллинг пропущенных звонков каждые 15 секунд
+    // Мгновенный ответ на пропущенный звонок через event handler
+    client.addEventHandler(async (event) => {
+      if (!state.isAway || !state.awayText) return;
+      if (!event.isPrivate) return;
+      const msg = event.message;
+      if (!msg) return;
+      if (msg.className !== 'MessageService') return;
+      if (msg.action?.className !== 'MessageActionPhoneCall') return;
+      if (state.repliedCalls.has(msg.id)) return;
+      state.repliedCalls.add(msg.id);
+      console.log(`[userbot] ☎️ User ${userId}: missed call id=${msg.id} (instant)`);
+      try {
+        await client.sendMessage(msg.peerId, { message: state.awayText });
+        console.log(`[userbot] ✅ User ${userId}: replied to call (instant)`);
+      } catch (e) {
+        console.error(`[userbot] call reply error (${userId}):`, e.message);
+      }
+    }, new NewMessage({ incoming: true }));
+
+    // Поллинг пропущенных звонков каждые 30 секунд (fallback, если event не сработал)
     state.pollInterval = setInterval(async () => {
       if (!state.isAway || !state.awayText) return;
       try {
@@ -120,7 +139,7 @@ class UserbotManager {
       } catch (e) {
         console.error(`[userbot] poll calls error (${userId}):`, e.message);
       }
-    }, 15000);
+    }, 30000);
   }
 
   // Подключить нового пользователя (после авторизации)
