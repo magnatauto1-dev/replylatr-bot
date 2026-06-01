@@ -220,7 +220,11 @@ async function initiateAuth(userId) {
   client.start({
     phoneNumber: () => new Promise(resolve => {
       authCallbacks.set(`${userId}_phone`, resolve);
-      send(userId, '📱 Введи свой номер телефона (например: +79001234567):');
+      send(userId,
+        '📱 Введи свой номер телефона (например: +79001234567)\n\n' +
+        '⚠️ Telegram пришлёт уведомление: _«Выполнен вход с нового устройства»_ — это нормально, это я подключаюсь к твоему аккаунту для автоответов.',
+        { parse_mode: 'Markdown' }
+      );
     }),
     phoneCode: () => new Promise(resolve => {
       authCallbacks.set(`${userId}_code`, resolve);
@@ -249,7 +253,12 @@ async function initiateAuth(userId) {
     await userbotManager.addUser(String(userId), sessionStr);
     cleanupAuth(userId);
 
-    await send(userId, '✅ Аккаунт успешно подключён!\n\nТеперь можешь включить автоответчик.');
+    await send(userId,
+      '✅ *Аккаунт подключён!*\n\n' +
+      '🔐 *Безопасность:* твоя сессия зашифрована — мы не читаем твои сообщения и переписку. Бот только отправляет автоответы от твоего имени, когда ты включаешь его.\n\n' +
+      'Если получил от Telegram уведомление о новом входе — всё верно, это было подключение.',
+      { parse_mode: 'Markdown' }
+    );
     await showMain(userId);
   }).catch(async (err) => {
     console.error(`[auth] Failed for user ${userId}:`, err.message);
