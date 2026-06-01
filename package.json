@@ -1,0 +1,15 @@
+{
+  "name": "replylatr-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "bash start.sh"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "telegram": "^2.26.22",
+    "big-integer": "^1.6.51",
+    "firebase-admin": "^12.0.0",
+    "node-cron": "^3.0.3"
+  }
+}
