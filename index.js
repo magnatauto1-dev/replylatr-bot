@@ -54,6 +54,27 @@ async function requireConnected(userId) {
   return true;
 }
 
+// Валенсийское время (Europe/Madrid) — пользователь вводит дату/время по
+// своим мадридским часам, а Railway-контейнер живёт в UTC. Без сторонних
+// зависимостей: "круговой" пересчёт через Intl.DateTimeFormat, сам учитывает
+// переход CET(+1)/CEST(+2) (28.07, Pavel — раньше new Date(y,m,d,hh,mm) читал
+// компоненты как системное UTC-время контейнера, время "до" уезжало на 1-2ч).
+const MADRID_TZ = 'Europe/Madrid';
+
+function madridWallToTimestamp(y, month, day, hh, mm) {
+  const guess = Date.UTC(y, month - 1, day, hh, mm);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: MADRID_TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(guess));
+  const get = (t) => parts.find((p) => p.type === t).value;
+  const renderedAsUTC = Date.UTC(
+    Number(get('year')), Number(get('month')) - 1, Number(get('day')),
+    Number(get('hour')) % 24, Number(get('minute')), Number(get('second')),
+  );
+  return guess - (renderedAsUTC - guess);
+}
+
 // Парсит ввод пользователя в timestamp авто-выключения
 // inputType: 'hours' — только цифры, 'date' — только дата, undefined — оба варианта
 function parseUntil(text, inputType) {
@@ -67,14 +88,13 @@ function parseUntil(text, inputType) {
     }
   }
   if (!inputType || inputType === 'date') {
-    // Дата: "15.06" или "15.06 18:00" или "15.06.2026 18:00"
+    // Дата: "15.06" или "15.06 18:00" или "15.06.2026 18:00" — по Мадриду
     const dateMatch = text.match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s*(?:(\d{1,2}):(\d{2}))?$/);
     if (dateMatch) {
       const [, day, month, year, hh, mm] = dateMatch;
-      const y = year ? parseInt(year) : new Date().getFullYear();
-      const d = new Date(y, parseInt(month) - 1, parseInt(day),
-                         hh ? parseInt(hh) : 0, mm ? parseInt(mm) : 0);
-      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) return d.getTime();
+      const y = year ? parseInt(year) : Number(new Intl.DateTimeFormat('en-US', { timeZone: MADRID_TZ, year: 'numeric' }).format(new Date()));
+      const ts = madridWallToTimestamp(y, parseInt(month), parseInt(day), hh ? parseInt(hh) : 0, mm ? parseInt(mm) : 0);
+      if (!isNaN(ts) && ts > Date.now()) return ts;
     }
   }
   return null;
@@ -91,10 +111,13 @@ function formatUntil(until) {
   if (diffH < 24) return `через ${diffH} ч`;
   if (diffDays === 1) return 'через 1 день';
   if (diffDays < 30) return `через ${diffDays} дн`;
-  // Для дальних дат — показываем число и месяц (UTC, нейтрально)
-  const d = new Date(until);
-  const months = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
-  return `${d.getUTCDate()} ${months[d.getUTCMonth()]}`;
+  // Для дальних дат — показываем число и месяц по Мадриду
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: MADRID_TZ, day: 'numeric', month: 'short' }).formatToParts(new Date(until));
+  const day = parts.find((p) => p.type === 'day').value;
+  const monEn = parts.find((p) => p.type === 'month').value.toLowerCase();
+  const months = { jan: 'янв', feb: 'фев', mar: 'мар', apr: 'апр', may: 'май', jun: 'июн',
+                    jul: 'июл', aug: 'авг', sep: 'сен', oct: 'окт', nov: 'ноя', dec: 'дек' };
+  return `${day} ${months[monEn] || monEn}`;
 }
 
 // Читаемое название дней расписания
